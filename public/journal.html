@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Mono & DIV Journal</title>
+<link rel="stylesheet" href="/styles.css">
+<script src="/journal.js" defer></script>
+</head>
+<body>
+<div class="wrap journalWrap">
+<header>
+  <div>
+    <h1>Journal</h1>
+    <div class="subtitle">Console-style buy history for treasury trades, dividends, treasury interest, and peer-to-peer sales. The price/value mark is kept in a separate right-side column.</div>
+    <div class="topActions">
+      <a class="topLink" href="/">Back to Game</a>
+      <button class="secondary" onclick="fetchJournal()">Refresh</button>
+      <button class="bad" onclick="clearJournal()">Clear Journal</button>
+    </div>
+  </div>
+  <div class="timebox">
+    <div class="small">Simulation time</div>
+    <div class="big">Day <span id="day">0</span>, Hour <span id="hourOfDay">0</span></div>
+    <div class="small">Year <span id="year">0</span> · <span id="speedStatus">Loading...</span></div>
+  </div>
+</header>
+<section class="consoleCard">
+  <div class="consoleHead">
+    <div>
+      <h2>Buy / Sell Console</h2>
+      <div class="small"><span id="journalCount">0</span> total entries · newest first</div>
+    </div>
+    <div class="legend">
+      <span class="bought">bought = green</span>
+      <span class="sold">sold = gold</span>
+      <span class="peer">peer = blue</span>
+      <span class="white">TDi / TIn = white</span>
+    </div>
+  </div>
+  <div id="journalConsole" class="journalConsole"><div class="small">Loading journal...</div></div>
+</section>
+</div>
+</body>
+</html>
