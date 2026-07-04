@@ -1,0 +1,14 @@
+{
+  "name": "mono-div-fly-game",
+  "version": "1.0.0",
+  "description": "Mono & DIV Coin Game running server-side on Fly.io with a Journal page.",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {}
+}
