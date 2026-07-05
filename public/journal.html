@@ -6,21 +6,31 @@
 <title>Mono & DIV Journal</title>
 <link rel="stylesheet" href="/styles.css">
 <style>
+  .desktopJournalTools,
+  .mobileJournalTools{
+    border-bottom:1px solid var(--line);
+    background:rgba(255,255,255,.018);
+  }
+
   .desktopJournalTools{
     display:flex;
     align-items:center;
     justify-content:space-between;
     gap:12px;
     padding:12px 16px;
-    border-bottom:1px solid var(--line);
-    background:rgba(255,255,255,.018);
   }
+
+  .mobileJournalTools{
+    display:none;
+  }
+
   .journalFilters{
     display:flex;
     align-items:center;
     gap:8px;
     flex-wrap:wrap;
   }
+
   .filterChip{
     display:inline-flex;
     align-items:center;
@@ -36,15 +46,18 @@
     font-weight:850;
     font-family:"SFMono-Regular",Consolas,"Liberation Mono",monospace;
   }
+
   .filterChip input{
     width:auto;
     margin:0;
     transform:none;
     accent-color:#7cffb2;
   }
+
   .filterChip:has(input:not(:checked)){
     opacity:.42;
   }
+
   .journalToolButtons{
     display:flex;
     align-items:center;
@@ -52,21 +65,55 @@
     flex-wrap:wrap;
     justify-content:flex-end;
   }
+
   .copyStatus{
     min-width:92px;
     color:var(--muted);
     font-size:12px;
     text-align:right;
   }
+
   .journalEmptyFiltered{
     padding:12px;
     color:var(--muted);
     font-family:"SFMono-Regular",Consolas,"Liberation Mono",monospace;
     font-size:13px;
   }
+
   @media(max-width:820px){
     .desktopJournalTools{
       display:none !important;
+    }
+
+    .mobileJournalTools{
+      display:block;
+      padding:10px;
+    }
+
+    .mobileJournalTools .journalFilters{
+      display:grid;
+      grid-template-columns:repeat(2, minmax(0, 1fr));
+      gap:8px;
+    }
+
+    .mobileJournalTools .filterChip{
+      width:100%;
+      justify-content:center;
+      min-height:42px;
+      padding:10px 8px;
+      border-radius:12px;
+      font-size:12px;
+      text-align:center;
+    }
+
+    .mobileJournalTools .filterChip input{
+      flex:0 0 auto;
+    }
+  }
+
+  @media(max-width:390px){
+    .mobileJournalTools .journalFilters{
+      grid-template-columns:1fr;
     }
   }
 </style>
@@ -104,8 +151,9 @@
     </div>
   </div>
 
+  <!-- Desktop: filters + copy tools -->
   <div class="desktopJournalTools" aria-label="Desktop journal filters and copy tools">
-    <div class="journalFilters">
+    <div class="journalFilters" data-filter-surface="desktop">
       <label class="filterChip"><input type="checkbox" data-journal-filter="interest" checked>Interest</label>
       <label class="filterChip"><input type="checkbox" data-journal-filter="dividends" checked>Dividends</label>
       <label class="filterChip"><input type="checkbox" data-journal-filter="mono" checked>Mono</label>
@@ -120,6 +168,17 @@
     </div>
   </div>
 
+  <!-- Mobile: filters only, no copy tools -->
+  <div class="mobileJournalTools" aria-label="Mobile journal filters">
+    <div class="journalFilters" data-filter-surface="mobile">
+      <label class="filterChip"><input type="checkbox" data-journal-filter="interest" checked>Interest</label>
+      <label class="filterChip"><input type="checkbox" data-journal-filter="dividends" checked>Dividends</label>
+      <label class="filterChip"><input type="checkbox" data-journal-filter="mono" checked>Mono</label>
+      <label class="filterChip"><input type="checkbox" data-journal-filter="div" checked>Div</label>
+      <label class="filterChip"><input type="checkbox" data-journal-filter="peers" checked>Peers</label>
+    </div>
+  </div>
+
   <div id="journalConsole" class="journalConsole"><div class="small">Loading journal...</div></div>
 </section>
 </div>
@@ -128,7 +187,6 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const FILTER_STORAGE_KEY = "monoDivJournalFiltersV1";
 
 const DEFAULT_FILTERS = {
   interest:true,
@@ -138,14 +196,21 @@ const DEFAULT_FILTERS = {
   peers:true
 };
 
+const STORAGE_KEYS = {
+  desktop:"monoDivJournalDesktopFiltersV2",
+  mobile:"monoDivJournalMobileFiltersV2"
+};
+
+const mobileQuery = window.matchMedia("(max-width: 820px)");
+
 let latestJournalPayload = { items: [], count: 0, derived: {} };
 let latestShownJournalItems = [];
-let currentJournalFilters = loadJournalFilters();
 let copyStatusTimer = null;
 
-function filterInputs(){
-  return Array.from(document.querySelectorAll("[data-journal-filter]"));
-}
+let journalFilters = {
+  desktop:loadFilters("desktop"),
+  mobile:loadFilters("mobile")
+};
 
 function setText(id, value){
   const el = $(id);
@@ -161,35 +226,53 @@ function escapeHtml(value){
   }[ch]));
 }
 
-function loadJournalFilters(){
+function activeSurface(){
+  return mobileQuery.matches ? "mobile" : "desktop";
+}
+
+function activeFilters(){
+  return journalFilters[activeSurface()];
+}
+
+function filterInputs(surface){
+  return Array.from(document.querySelectorAll(`[data-filter-surface="${surface}"] [data-journal-filter]`));
+}
+
+function loadFilters(surface){
   try{
-    const saved = JSON.parse(localStorage.getItem(FILTER_STORAGE_KEY) || "null");
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEYS[surface]) || "null");
     return { ...DEFAULT_FILTERS, ...(saved || {}) };
   }catch{
     return { ...DEFAULT_FILTERS };
   }
 }
 
-function saveJournalFilters(){
-  localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify(currentJournalFilters));
+function saveFilters(surface){
+  localStorage.setItem(STORAGE_KEYS[surface], JSON.stringify(journalFilters[surface]));
 }
 
-function syncFilterCheckboxesFromState(){
-  for(const input of filterInputs()){
+function syncCheckboxesFromState(surface){
+  for(const input of filterInputs(surface)){
     const key = input.dataset.journalFilter;
-    input.checked = currentJournalFilters[key] !== false;
+    input.checked = journalFilters[surface][key] !== false;
   }
 }
 
-function readDesktopFiltersIntoState(){
-  for(const input of filterInputs()){
-    const key = input.dataset.journalFilter;
-    currentJournalFilters[key] = input.checked;
-  }
-  saveJournalFilters();
+function syncAllCheckboxesFromState(){
+  syncCheckboxesFromState("desktop");
+  syncCheckboxesFromState("mobile");
 }
 
-function itemKindText(item){
+function readSurfaceCheckboxesIntoState(surface){
+  for(const input of filterInputs(surface)){
+    const key = input.dataset.journalFilter;
+    journalFilters[surface][key] = input.checked;
+  }
+
+  saveFilters(surface);
+}
+
+function itemSearchText(item){
   return [
     item.kind,
     item.asset,
@@ -201,7 +284,7 @@ function itemKindText(item){
 }
 
 function isInterestItem(item){
-  const t = itemKindText(item);
+  const t = itemSearchText(item);
   return (
     t.includes("interest") ||
     t.includes("treasury interest") ||
@@ -211,7 +294,7 @@ function isInterestItem(item){
 }
 
 function isDividendItem(item){
-  const t = itemKindText(item);
+  const t = itemSearchText(item);
   return (
     t.includes("dividend") ||
     t.includes("tdi") ||
@@ -221,7 +304,7 @@ function isDividendItem(item){
 }
 
 function isPeerItem(item){
-  const t = itemKindText(item);
+  const t = itemSearchText(item);
   return (
     String(item.source || "").toLowerCase() === "peer" ||
     t.includes("[peer]") ||
@@ -237,12 +320,12 @@ function isMonoItem(item){
 
 function isDivItem(item){
   const asset = String(item.asset || "").toLowerCase();
-  const text = String(item.text || "").toLowerCase();
+  const text = ` ${String(item.text || "").toLowerCase()} `;
   return asset === "div" || text.includes(" div ");
 }
 
 function itemPassesJournalFilters(item){
-  const filters = currentJournalFilters;
+  const filters = activeFilters();
 
   const interest = isInterestItem(item);
   const dividend = isDividendItem(item);
@@ -253,13 +336,11 @@ function itemPassesJournalFilters(item){
   if(!filters.interest && interest) return false;
   if(!filters.dividends && dividend) return false;
   if(!filters.peers && peer) return false;
-
   if(!filters.mono && mono) return false;
 
-  /* 
+  /*
     DIV trades are controlled by the Div filter.
-    DIV dividend entries are controlled by the Dividends filter instead,
-    so turning off Div does not accidentally hide TDi if Dividends is still on.
+    DIV dividend entries are controlled by the Dividends filter instead.
   */
   if(!filters.div && div && !dividend) return false;
 
@@ -309,7 +390,7 @@ function renderJournal(payload){
   }
 
   if(!visibleItems.length){
-    el.innerHTML = '<div class="journalEmptyFiltered">No entries match the current desktop filters.</div>';
+    el.innerHTML = '<div class="journalEmptyFiltered">No entries match the current filters.</div>';
     return;
   }
 
@@ -366,6 +447,10 @@ async function copyText(text){
 
 async function copyJournalEntries(){
   try{
+    if(activeSurface() !== "desktop"){
+      return;
+    }
+
     const items = latestShownJournalItems || [];
 
     if(!items.length){
@@ -385,33 +470,41 @@ async function copyJournalEntries(){
 }
 
 function setAllJournalFilters(enabled){
+  const surface = activeSurface();
+
   for(const key of Object.keys(DEFAULT_FILTERS)){
-    currentJournalFilters[key] = !!enabled;
+    journalFilters[surface][key] = !!enabled;
   }
 
-  saveJournalFilters();
-  syncFilterCheckboxesFromState();
+  saveFilters(surface);
+  syncCheckboxesFromState(surface);
   renderJournal(latestJournalPayload);
 }
 
 function attachFilterListeners(){
-  syncFilterCheckboxesFromState();
+  syncAllCheckboxesFromState();
 
-  for(const input of filterInputs()){
-    input.addEventListener("change", () => {
-      readDesktopFiltersIntoState();
-      renderJournal(latestJournalPayload);
-    });
+  for(const surface of ["desktop", "mobile"]){
+    for(const input of filterInputs(surface)){
+      input.addEventListener("change", () => {
+        readSurfaceCheckboxesIntoState(surface);
+        renderJournal(latestJournalPayload);
+      });
+    }
   }
 }
 
-window.addEventListener("storage", (event) => {
-  if(event.key === FILTER_STORAGE_KEY){
-    currentJournalFilters = loadJournalFilters();
-    syncFilterCheckboxesFromState();
+if(typeof mobileQuery.addEventListener === "function"){
+  mobileQuery.addEventListener("change", () => {
+    syncAllCheckboxesFromState();
     renderJournal(latestJournalPayload);
-  }
-});
+  });
+}else if(typeof mobileQuery.addListener === "function"){
+  mobileQuery.addListener(() => {
+    syncAllCheckboxesFromState();
+    renderJournal(latestJournalPayload);
+  });
+}
 
 window.fetchJournal = fetchJournal;
 window.clearJournal = clearJournal;
