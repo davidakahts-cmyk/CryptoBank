@@ -5,7 +5,72 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>Mono & DIV Journal</title>
 <link rel="stylesheet" href="/styles.css">
-<script src="/journal.js" defer></script>
+<style>
+  /* Desktop-only journal tools. Mobile stays clean and uses the existing mobile journal layout. */
+  .desktopJournalTools{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+    padding:12px 16px;
+    border-bottom:1px solid var(--line);
+    background:rgba(255,255,255,.018);
+  }
+  .journalFilters{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    flex-wrap:wrap;
+  }
+  .filterChip{
+    display:inline-flex;
+    align-items:center;
+    gap:7px;
+    user-select:none;
+    cursor:pointer;
+    border:1px solid var(--line);
+    border-radius:999px;
+    padding:7px 10px;
+    background:rgba(255,255,255,.035);
+    color:var(--text);
+    font-size:12px;
+    font-weight:850;
+    font-family:"SFMono-Regular",Consolas,"Liberation Mono",monospace;
+  }
+  .filterChip input{
+    width:auto;
+    margin:0;
+    transform:none;
+    accent-color:#7cffb2;
+  }
+  .filterChip:has(input:not(:checked)){
+    opacity:.42;
+  }
+  .journalToolButtons{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    flex-wrap:wrap;
+    justify-content:flex-end;
+  }
+  .copyStatus{
+    min-width:92px;
+    color:var(--muted);
+    font-size:12px;
+    text-align:right;
+  }
+  .journalEmptyFiltered{
+    padding:12px;
+    color:var(--muted);
+    font-family:"SFMono-Regular",Consolas,"Liberation Mono",monospace;
+    font-size:13px;
+  }
+  @media(max-width:820px){
+    .desktopJournalTools{
+      display:none !important;
+    }
+  }
+</style>
 </head>
 <body>
 <div class="wrap journalWrap">
@@ -25,11 +90,12 @@
     <div class="small">Year <span id="year">0</span> · <span id="speedStatus">Loading...</span></div>
   </div>
 </header>
+
 <section class="consoleCard">
   <div class="consoleHead">
     <div>
       <h2>Buy / Sell Console</h2>
-      <div class="small"><span id="journalCount">0</span> total entries · newest first</div>
+      <div class="small"><span id="filteredCount">0</span> shown · <span id="journalCount">0</span> total entries · newest first</div>
     </div>
     <div class="legend">
       <span class="bought">bought = green</span>
@@ -38,8 +104,203 @@
       <span class="white">TDi / TIn = white</span>
     </div>
   </div>
+
+  <div class="desktopJournalTools" aria-label="Desktop journal filters and copy tools">
+    <div class="journalFilters">
+      <label class="filterChip"><input type="checkbox" data-journal-filter="interest" checked>Interest</label>
+      <label class="filterChip"><input type="checkbox" data-journal-filter="dividends" checked>Dividends</label>
+      <label class="filterChip"><input type="checkbox" data-journal-filter="mono" checked>Mono</label>
+      <label class="filterChip"><input type="checkbox" data-journal-filter="div" checked>Div</label>
+      <label class="filterChip"><input type="checkbox" data-journal-filter="peers" checked>Peers</label>
+    </div>
+    <div class="journalToolButtons">
+      <button class="secondary" onclick="setAllJournalFilters(true)">All On</button>
+      <button class="secondary" onclick="setAllJournalFilters(false)">All Off</button>
+      <button onclick="copyJournalEntries()">Copy All Entries</button>
+      <span class="copyStatus" id="copyStatus"></span>
+    </div>
+  </div>
+
   <div id="journalConsole" class="journalConsole"><div class="small">Loading journal...</div></div>
 </section>
 </div>
+
+<script>
+"use strict";
+
+const $ = (id) => document.getElementById(id);
+const filterInputs = () => Array.from(document.querySelectorAll("[data-journal-filter]"));
+const desktopToolsQuery = window.matchMedia("(min-width: 821px)");
+
+let latestJournalPayload = { items: [], count: 0, derived: {} };
+let copyStatusTimer = null;
+
+function setText(id, value){
+  const el = $(id);
+  if(el) el.textContent = value;
+}
+
+function escapeHtml(value){
+  return String(value).replace(/[&<>"]/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[ch]));
+}
+
+function isDesktopJournal(){
+  return desktopToolsQuery.matches;
+}
+
+function getJournalFilterState(){
+  const state = { interest:true, dividends:true, mono:true, div:true, peers:true };
+  for(const input of filterInputs()){
+    state[input.dataset.journalFilter] = input.checked;
+  }
+  return state;
+}
+
+function itemPassesDesktopFilters(item){
+  if(!isDesktopJournal()) return true;
+
+  const filters = getJournalFilterState();
+  const kind = String(item.kind || "").toLowerCase();
+  const asset = String(item.asset || "").toLowerCase();
+  const source = String(item.source || "").toLowerCase();
+  const code = String(item.code || "").toLowerCase();
+
+  if(!filters.interest && (kind === "interest" || code === "tin")) return false;
+  if(!filters.dividends && (kind === "dividend" || code === "tdi")) return false;
+  if(!filters.peers && source === "peer") return false;
+  if(!filters.mono && asset === "mono") return false;
+  if(!filters.div && asset === "div" && kind !== "dividend") return false;
+
+  return true;
+}
+
+function formatJournalLine(item){
+  const value = item.value ? ` = ${item.value}` : "";
+  return `D${item.day} H${item.hourOfDay} - ${item.text}${value}`;
+}
+
+async function fetchJournal(){
+  try{
+    const res = await fetch("/api/journal?limit=1000", { cache:"no-store" });
+    if(!res.ok) throw new Error("Journal request failed");
+    const payload = await res.json();
+    latestJournalPayload = payload;
+    renderJournal(payload);
+  }catch(err){
+    const el = $("journalConsole");
+    if(el) el.innerHTML = `<div class="small">Could not load journal: ${escapeHtml(err.message)}</div>`;
+    console.error(err);
+  }
+}
+
+function renderJournal(payload){
+  const d = payload.derived || {};
+  const allItems = payload.items || [];
+  const visibleItems = allItems.filter(itemPassesDesktopFilters);
+
+  setText("day", d.day ?? 0);
+  setText("hourOfDay", d.hourOfDay ?? 0);
+  setText("year", d.year ?? 0);
+  setText("speedStatus", d.speedStatus || "");
+  setText("journalCount", payload.count || 0);
+  setText("filteredCount", visibleItems.length);
+
+  const el = $("journalConsole");
+  if(!el) return;
+
+  if(!allItems.length){
+    el.innerHTML = '<div class="small">No journal entries yet.</div>';
+    return;
+  }
+
+  if(!visibleItems.length){
+    el.innerHTML = '<div class="journalEmptyFiltered">No entries match the current desktop filters.</div>';
+    return;
+  }
+
+  el.innerHTML = visibleItems.map(item => {
+    const cls = item.color === "peer" ? "jPeer" : item.color === "bought" ? "jBought" : item.color === "sold" ? "jSold" : "jWhite";
+    const time = `D${item.day} H${item.hourOfDay}`;
+    return `<div class="journalLine ${cls}"><div class="jTime">${escapeHtml(time)}</div><div class="jText">- ${escapeHtml(item.text)}</div><div class="jValue">${escapeHtml(item.value || "")}</div></div>`;
+  }).join("");
+}
+
+async function clearJournal(){
+  try{
+    const res = await fetch("/api/action", {
+      method:"POST",
+      headers:{"content-type":"application/json"},
+      body:JSON.stringify({ type:"clearJournal" })
+    });
+    if(!res.ok) throw new Error("Clear failed");
+    await fetchJournal();
+  }catch(err){
+    alert(err.message || "Clear failed");
+  }
+}
+
+function setCopyStatus(message){
+  setText("copyStatus", message);
+  if(copyStatusTimer) clearTimeout(copyStatusTimer);
+  copyStatusTimer = setTimeout(() => setText("copyStatus", ""), 2200);
+}
+
+async function copyText(text){
+  if(navigator.clipboard && window.isSecureContext){
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  textarea.remove();
+}
+
+async function copyJournalEntries(){
+  try{
+    const res = await fetch("/api/journal?limit=5000", { cache:"no-store" });
+    if(!res.ok) throw new Error("Copy request failed");
+    const payload = await res.json();
+    const items = payload.items || [];
+
+    if(!items.length){
+      setCopyStatus("Nothing to copy");
+      return;
+    }
+
+    const text = items.map(formatJournalLine).join("\n");
+    await copyText(text);
+    setCopyStatus(`Copied ${items.length}`);
+  }catch(err){
+    setCopyStatus("Copy failed");
+    console.error(err);
+  }
+}
+
+function setAllJournalFilters(enabled){
+  for(const input of filterInputs()) input.checked = !!enabled;
+  renderJournal(latestJournalPayload);
+}
+
+for(const input of filterInputs()){
+  input.addEventListener("change", () => renderJournal(latestJournalPayload));
+}
+
+desktopToolsQuery.addEventListener?.("change", () => renderJournal(latestJournalPayload));
+
+window.fetchJournal = fetchJournal;
+window.clearJournal = clearJournal;
+window.copyJournalEntries = copyJournalEntries;
+window.setAllJournalFilters = setAllJournalFilters;
+
+fetchJournal();
+setInterval(fetchJournal, 1500);
+</script>
 </body>
 </html>
