@@ -425,6 +425,126 @@ function matchDivMiddleToMarketInMidZoneV2() {
   }
 }
 
+function coinKeys(coin) {
+  return coin === "mono"
+    ? { priceKey: "monoPrice", treasuryKey: "treasuryMono", circKey: "circMono", listedKey: "monoListed" }
+    : { priceKey: "divPrice", treasuryKey: "treasuryDiv", circKey: "circDiv", listedKey: "divListed" };
+}
+
+function activeTreasuryPoints(coin) {
+  if (coin === "mono") {
+    return {
+      buy: getPoint("mono", "buy"),
+      sell: getPoint("mono", "sell"),
+      label: "selling point"
+    };
+  }
+
+  const useFloor = s.divPrice <= divFloorSellV2();
+  return {
+    buy: useFloor ? divFloorBuyV2() : getPoint("div", "buy"),
+    sell: useFloor ? divFloorSellV2() : getPoint("div", "sell"),
+    label: useFloor ? "floor" : "mid-zone"
+  };
+}
+
+function treasurySalePressure(hours, coin, marketPrice, buy, sell) {
+  const days = Math.max(0.0001, hours / 24);
+  const mid = (buy + sell) / 2;
+  const normalizedGap = clamp((marketPrice - mid) / Math.max(0.0001, mid), -0.25, 0.25);
+
+  const baseDaily = coin === "mono" ? 0.0022 : 0.0030;
+  const adoptionDaily = coin === "mono" ? 0.0008 : 0.00045;
+  const priceSensitivity = coin === "mono" ? 0.60 : 0.45;
+
+  const naturalDemand = adoptionDaily * days;
+  const randomDemand = randomNormal() * baseDaily * Math.sqrt(days);
+  const priceDemand = normalizedGap * priceSensitivity * days;
+
+  return naturalDemand + randomDemand + priceDemand;
+}
+
+function executeTreasurySale(coin, amount, price, options = {}) {
+  const keys = coinKeys(coin);
+  amount = Math.max(0, Number(amount) || 0);
+  const sold = Math.min(amount, s[keys.listedKey], s[keys.treasuryKey]);
+  if (sold <= 0) return 0;
+
+  const usd = sold * price;
+  s[keys.listedKey] -= sold;
+  s[keys.treasuryKey] -= sold;
+  s[keys.circKey] += sold;
+  s.treasuryUsd += usd;
+
+  const priceKey = keys.priceKey;
+  const currentPrice = s[priceKey];
+  const pull = clamp((sold / Math.max(1, s[keys.circKey])) * 0.03, 0.00001, 0.015);
+  s[priceKey] = Math.max(0.0001, currentPrice + (price - currentPrice) * pull);
+
+  journalTrade({ source: "treasury", coin, action: "sold", amount: sold, usd, price });
+
+  if (!options.silentLog && sold > 1000) {
+    const name = coin === "mono" ? "MONO" : "DIV";
+    addLog(`Treasury sold ${fmtNum(sold)} ${name} into circulation at $${price.toFixed(4)}.`, "good");
+  }
+
+  return sold;
+}
+
+function executeTreasuryBuyback(coin, amount, price, options = {}) {
+  const keys = coinKeys(coin);
+  amount = Math.max(0, Number(amount) || 0);
+  const affordable = s.treasuryUsd / Math.max(0.0001, price);
+  const bought = Math.min(amount, s[keys.circKey], affordable);
+  if (bought <= 0) return 0;
+
+  const usd = bought * price;
+  s[keys.circKey] -= bought;
+  s[keys.treasuryKey] += bought;
+  s.treasuryUsd -= usd;
+
+  const priceKey = keys.priceKey;
+  const currentPrice = s[priceKey];
+  const pull = clamp((bought / Math.max(1, s[keys.circKey] + bought)) * 0.04, 0.00001, 0.018);
+  s[priceKey] = Math.max(0.0001, currentPrice + (price - currentPrice) * pull);
+
+  journalTrade({ source: "treasury", coin, action: "bought", amount: bought, usd, price });
+
+  if (!options.silentLog && bought > 1000) {
+    const name = coin === "mono" ? "MONO" : "DIV";
+    addLog(`Treasury bought back ${fmtNum(bought)} ${name} from circulation at $${price.toFixed(4)}.`, "warn");
+  }
+
+  return bought;
+}
+
+function processPrimaryTreasuryMarket(hours) {
+  processPrimaryTreasuryMarketForCoin(hours, "mono");
+  processPrimaryTreasuryMarketForCoin(hours, "div");
+}
+
+function processPrimaryTreasuryMarketForCoin(hours, coin) {
+  const keys = coinKeys(coin);
+  const points = activeTreasuryPoints(coin);
+  const marketPrice = s[keys.priceKey];
+  const circ = Math.max(1, s[keys.circKey]);
+  const days = Math.max(0.0001, hours / 24);
+
+  const flowPct = treasurySalePressure(hours, coin, marketPrice, points.buy, points.sell);
+  const rawAmount = Math.abs(circ * flowPct);
+  const maxDailyFlow = coin === "mono" ? 0.035 : 0.050;
+  const maxAmount = circ * maxDailyFlow * days + 500;
+  const amount = Math.min(rawAmount, maxAmount);
+
+  if (amount < 1) return;
+
+  if (flowPct > 0) {
+    executeTreasurySale(coin, amount, points.sell, { silentLog: true });
+  } else if (flowPct < 0) {
+    executeTreasuryBuyback(coin, amount, points.buy, { silentLog: true });
+  }
+}
+
 function processTreasuryDesk(hours, coin) {
   if (coin === "div") {
     processDivTreasuryDesk(hours);
@@ -705,6 +825,7 @@ function processTick(hours) {
   marketStep(hours, "mono");
   marketStep(hours, "div");
   processPeerTrades(hours);
+  processPrimaryTreasuryMarket(hours);
   processTreasuryDesk(hours, "mono");
   processTreasuryDesk(hours, "div");
   processDivLoweringRule();
