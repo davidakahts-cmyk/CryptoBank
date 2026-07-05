@@ -6,7 +6,6 @@
 <title>Mono & DIV Journal</title>
 <link rel="stylesheet" href="/styles.css">
 <style>
-  /* Desktop-only journal tools. Mobile stays clean and uses the existing mobile journal layout. */
   .desktopJournalTools{
     display:flex;
     align-items:center;
@@ -129,11 +128,24 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const filterInputs = () => Array.from(document.querySelectorAll("[data-journal-filter]"));
+const FILTER_STORAGE_KEY = "monoDivJournalFiltersV1";
+
+const DEFAULT_FILTERS = {
+  interest:true,
+  dividends:true,
+  mono:true,
+  div:true,
+  peers:true
+};
 
 let latestJournalPayload = { items: [], count: 0, derived: {} };
 let latestShownJournalItems = [];
+let currentJournalFilters = loadJournalFilters();
 let copyStatusTimer = null;
+
+function filterInputs(){
+  return Array.from(document.querySelectorAll("[data-journal-filter]"));
+}
 
 function setText(id, value){
   const el = $(id);
@@ -141,38 +153,115 @@ function setText(id, value){
 }
 
 function escapeHtml(value){
-  return String(value).replace(/[&<>"]/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[ch]));
+  return String(value).replace(/[&<>"]/g, ch => ({
+    "&":"&amp;",
+    "<":"&lt;",
+    ">":"&gt;",
+    "\"":"&quot;"
+  }[ch]));
 }
 
-function getJournalFilterState(){
-  const state = {
-    interest:true,
-    dividends:true,
-    mono:true,
-    div:true,
-    peers:true
-  };
-
-  for(const input of filterInputs()){
-    state[input.dataset.journalFilter] = input.checked;
+function loadJournalFilters(){
+  try{
+    const saved = JSON.parse(localStorage.getItem(FILTER_STORAGE_KEY) || "null");
+    return { ...DEFAULT_FILTERS, ...(saved || {}) };
+  }catch{
+    return { ...DEFAULT_FILTERS };
   }
+}
 
-  return state;
+function saveJournalFilters(){
+  localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify(currentJournalFilters));
+}
+
+function syncFilterCheckboxesFromState(){
+  for(const input of filterInputs()){
+    const key = input.dataset.journalFilter;
+    input.checked = currentJournalFilters[key] !== false;
+  }
+}
+
+function readDesktopFiltersIntoState(){
+  for(const input of filterInputs()){
+    const key = input.dataset.journalFilter;
+    currentJournalFilters[key] = input.checked;
+  }
+  saveJournalFilters();
+}
+
+function itemKindText(item){
+  return [
+    item.kind,
+    item.asset,
+    item.source,
+    item.code,
+    item.text,
+    item.value
+  ].map(x => String(x || "").toLowerCase()).join(" ");
+}
+
+function isInterestItem(item){
+  const t = itemKindText(item);
+  return (
+    t.includes("interest") ||
+    t.includes("treasury interest") ||
+    t.includes("t_int") ||
+    t.includes("tin")
+  );
+}
+
+function isDividendItem(item){
+  const t = itemKindText(item);
+  return (
+    t.includes("dividend") ||
+    t.includes("tdi") ||
+    t.includes("tdiv") ||
+    t.includes("div given")
+  );
+}
+
+function isPeerItem(item){
+  const t = itemKindText(item);
+  return (
+    String(item.source || "").toLowerCase() === "peer" ||
+    t.includes("[peer]") ||
+    t.includes("peer")
+  );
+}
+
+function isMonoItem(item){
+  const asset = String(item.asset || "").toLowerCase();
+  const text = String(item.text || "").toLowerCase();
+  return asset === "mono" || text.includes("mono");
+}
+
+function isDivItem(item){
+  const asset = String(item.asset || "").toLowerCase();
+  const text = String(item.text || "").toLowerCase();
+  return asset === "div" || text.includes(" div ");
 }
 
 function itemPassesJournalFilters(item){
-  const filters = getJournalFilterState();
+  const filters = currentJournalFilters;
 
-  const kind = String(item.kind || "").toLowerCase();
-  const asset = String(item.asset || "").toLowerCase();
-  const source = String(item.source || "").toLowerCase();
-  const code = String(item.code || "").toLowerCase();
+  const interest = isInterestItem(item);
+  const dividend = isDividendItem(item);
+  const peer = isPeerItem(item);
+  const mono = isMonoItem(item);
+  const div = isDivItem(item);
 
-  if(!filters.interest && (kind === "interest" || code === "tin")) return false;
-  if(!filters.dividends && (kind === "dividend" || code === "tdi")) return false;
-  if(!filters.peers && source === "peer") return false;
-  if(!filters.mono && asset === "mono") return false;
-  if(!filters.div && asset === "div" && kind !== "dividend") return false;
+  if(!filters.interest && interest) return false;
+  if(!filters.dividends && dividend) return false;
+  if(!filters.peers && peer) return false;
+
+  if(!filters.mono && mono) return false;
+
+  /* 
+    DIV trades are controlled by the Div filter.
+    DIV dividend entries are controlled by the Dividends filter instead,
+    so turning off Div does not accidentally hide TDi if Dividends is still on.
+  */
+  if(!filters.div && div && !dividend) return false;
 
   return true;
 }
@@ -296,24 +385,40 @@ async function copyJournalEntries(){
 }
 
 function setAllJournalFilters(enabled){
-  for(const input of filterInputs()){
-    input.checked = !!enabled;
+  for(const key of Object.keys(DEFAULT_FILTERS)){
+    currentJournalFilters[key] = !!enabled;
   }
 
+  saveJournalFilters();
+  syncFilterCheckboxesFromState();
   renderJournal(latestJournalPayload);
 }
 
-for(const input of filterInputs()){
-  input.addEventListener("change", () => {
-    renderJournal(latestJournalPayload);
-  });
+function attachFilterListeners(){
+  syncFilterCheckboxesFromState();
+
+  for(const input of filterInputs()){
+    input.addEventListener("change", () => {
+      readDesktopFiltersIntoState();
+      renderJournal(latestJournalPayload);
+    });
+  }
 }
+
+window.addEventListener("storage", (event) => {
+  if(event.key === FILTER_STORAGE_KEY){
+    currentJournalFilters = loadJournalFilters();
+    syncFilterCheckboxesFromState();
+    renderJournal(latestJournalPayload);
+  }
+});
 
 window.fetchJournal = fetchJournal;
 window.clearJournal = clearJournal;
 window.copyJournalEntries = copyJournalEntries;
 window.setAllJournalFilters = setAllJournalFilters;
 
+attachFilterListeners();
 fetchJournal();
 setInterval(fetchJournal, 1500);
 </script>
