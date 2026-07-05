@@ -88,6 +88,10 @@
     .mobileJournalTools{
       display:block;
       padding:10px;
+      margin:12px 0 10px;
+      border:1px solid var(--line);
+      border-radius:16px;
+      background:rgba(17,27,49,.88);
     }
 
     .mobileJournalTools .journalFilters{
@@ -124,6 +128,18 @@
   <div>
     <h1>Journal</h1>
     <div class="subtitle">Console-style buy history for treasury trades, dividends, treasury interest, and peer-to-peer sales. The price/value mark is kept in a separate right-side column.</div>
+
+    <!-- Mobile: filters above Back to Game -->
+    <div class="mobileJournalTools" aria-label="Mobile journal filters">
+      <div class="journalFilters" data-filter-surface="mobile">
+        <label class="filterChip"><input type="checkbox" data-journal-filter="interest" checked>Interest</label>
+        <label class="filterChip"><input type="checkbox" data-journal-filter="dividends" checked>Dividends</label>
+        <label class="filterChip"><input type="checkbox" data-journal-filter="mono" checked>Mono</label>
+        <label class="filterChip"><input type="checkbox" data-journal-filter="div" checked>Div</label>
+        <label class="filterChip"><input type="checkbox" data-journal-filter="peers" checked>Peers</label>
+      </div>
+    </div>
+
     <div class="topActions">
       <a class="topLink" href="/">Back to Game</a>
       <button class="secondary" onclick="fetchJournal()">Refresh</button>
@@ -165,17 +181,6 @@
       <button class="secondary" onclick="setAllJournalFilters(false)">All Off</button>
       <button onclick="copyJournalEntries()">Copy Shown Entries</button>
       <span class="copyStatus" id="copyStatus"></span>
-    </div>
-  </div>
-
-  <!-- Mobile: filters only, no copy tools -->
-  <div class="mobileJournalTools" aria-label="Mobile journal filters">
-    <div class="journalFilters" data-filter-surface="mobile">
-      <label class="filterChip"><input type="checkbox" data-journal-filter="interest" checked>Interest</label>
-      <label class="filterChip"><input type="checkbox" data-journal-filter="dividends" checked>Dividends</label>
-      <label class="filterChip"><input type="checkbox" data-journal-filter="mono" checked>Mono</label>
-      <label class="filterChip"><input type="checkbox" data-journal-filter="div" checked>Div</label>
-      <label class="filterChip"><input type="checkbox" data-journal-filter="peers" checked>Peers</label>
     </div>
   </div>
 
@@ -338,10 +343,6 @@ function itemPassesJournalFilters(item){
   if(!filters.peers && peer) return false;
   if(!filters.mono && mono) return false;
 
-  /*
-    DIV trades are controlled by the Div filter.
-    DIV dividend entries are controlled by the Dividends filter instead.
-  */
   if(!filters.div && div && !dividend) return false;
 
   return true;
