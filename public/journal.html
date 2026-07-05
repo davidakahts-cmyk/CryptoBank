@@ -116,7 +116,7 @@
     <div class="journalToolButtons">
       <button class="secondary" onclick="setAllJournalFilters(true)">All On</button>
       <button class="secondary" onclick="setAllJournalFilters(false)">All Off</button>
-      <button onclick="copyJournalEntries()">Copy All Entries</button>
+      <button onclick="copyJournalEntries()">Copy Shown Entries</button>
       <span class="copyStatus" id="copyStatus"></span>
     </div>
   </div>
@@ -130,9 +130,9 @@
 
 const $ = (id) => document.getElementById(id);
 const filterInputs = () => Array.from(document.querySelectorAll("[data-journal-filter]"));
-const desktopToolsQuery = window.matchMedia("(min-width: 821px)");
 
 let latestJournalPayload = { items: [], count: 0, derived: {} };
+let latestShownJournalItems = [];
 let copyStatusTimer = null;
 
 function setText(id, value){
@@ -144,22 +144,25 @@ function escapeHtml(value){
   return String(value).replace(/[&<>"]/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[ch]));
 }
 
-function isDesktopJournal(){
-  return desktopToolsQuery.matches;
-}
-
 function getJournalFilterState(){
-  const state = { interest:true, dividends:true, mono:true, div:true, peers:true };
+  const state = {
+    interest:true,
+    dividends:true,
+    mono:true,
+    div:true,
+    peers:true
+  };
+
   for(const input of filterInputs()){
     state[input.dataset.journalFilter] = input.checked;
   }
+
   return state;
 }
 
-function itemPassesDesktopFilters(item){
-  if(!isDesktopJournal()) return true;
-
+function itemPassesJournalFilters(item){
   const filters = getJournalFilterState();
+
   const kind = String(item.kind || "").toLowerCase();
   const asset = String(item.asset || "").toLowerCase();
   const source = String(item.source || "").toLowerCase();
@@ -183,6 +186,7 @@ async function fetchJournal(){
   try{
     const res = await fetch("/api/journal?limit=1000", { cache:"no-store" });
     if(!res.ok) throw new Error("Journal request failed");
+
     const payload = await res.json();
     latestJournalPayload = payload;
     renderJournal(payload);
@@ -196,7 +200,9 @@ async function fetchJournal(){
 function renderJournal(payload){
   const d = payload.derived || {};
   const allItems = payload.items || [];
-  const visibleItems = allItems.filter(itemPassesDesktopFilters);
+  const visibleItems = allItems.filter(itemPassesJournalFilters);
+
+  latestShownJournalItems = visibleItems;
 
   setText("day", d.day ?? 0);
   setText("hourOfDay", d.hourOfDay ?? 0);
@@ -221,6 +227,7 @@ function renderJournal(payload){
   el.innerHTML = visibleItems.map(item => {
     const cls = item.color === "peer" ? "jPeer" : item.color === "bought" ? "jBought" : item.color === "sold" ? "jSold" : "jWhite";
     const time = `D${item.day} H${item.hourOfDay}`;
+
     return `<div class="journalLine ${cls}"><div class="jTime">${escapeHtml(time)}</div><div class="jText">- ${escapeHtml(item.text)}</div><div class="jValue">${escapeHtml(item.value || "")}</div></div>`;
   }).join("");
 }
@@ -232,7 +239,9 @@ async function clearJournal(){
       headers:{"content-type":"application/json"},
       body:JSON.stringify({ type:"clearJournal" })
     });
+
     if(!res.ok) throw new Error("Clear failed");
+
     await fetchJournal();
   }catch(err){
     alert(err.message || "Clear failed");
@@ -241,8 +250,12 @@ async function clearJournal(){
 
 function setCopyStatus(message){
   setText("copyStatus", message);
+
   if(copyStatusTimer) clearTimeout(copyStatusTimer);
-  copyStatusTimer = setTimeout(() => setText("copyStatus", ""), 2200);
+
+  copyStatusTimer = setTimeout(() => {
+    setText("copyStatus", "");
+  }, 2200);
 }
 
 async function copyText(text){
@@ -264,10 +277,7 @@ async function copyText(text){
 
 async function copyJournalEntries(){
   try{
-    const res = await fetch("/api/journal?limit=5000", { cache:"no-store" });
-    if(!res.ok) throw new Error("Copy request failed");
-    const payload = await res.json();
-    const items = payload.items || [];
+    const items = latestShownJournalItems || [];
 
     if(!items.length){
       setCopyStatus("Nothing to copy");
@@ -275,7 +285,9 @@ async function copyJournalEntries(){
     }
 
     const text = items.map(formatJournalLine).join("\n");
+
     await copyText(text);
+
     setCopyStatus(`Copied ${items.length}`);
   }catch(err){
     setCopyStatus("Copy failed");
@@ -284,15 +296,18 @@ async function copyJournalEntries(){
 }
 
 function setAllJournalFilters(enabled){
-  for(const input of filterInputs()) input.checked = !!enabled;
+  for(const input of filterInputs()){
+    input.checked = !!enabled;
+  }
+
   renderJournal(latestJournalPayload);
 }
 
 for(const input of filterInputs()){
-  input.addEventListener("change", () => renderJournal(latestJournalPayload));
+  input.addEventListener("change", () => {
+    renderJournal(latestJournalPayload);
+  });
 }
-
-desktopToolsQuery.addEventListener?.("change", () => renderJournal(latestJournalPayload));
 
 window.fetchJournal = fetchJournal;
 window.clearJournal = clearJournal;
