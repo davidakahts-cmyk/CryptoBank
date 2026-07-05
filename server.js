@@ -412,17 +412,17 @@ function marketStep(hours, coin) {
 
   s[priceKey] = Math.max(0.0001, price);
 
-  if (coin === "div") {
-    matchDivMiddleToMarketInMidZoneV2();
-  }
-}
+  /*
+    Important v2.0.0.1 fix:
+    DIV market price must NOT move the DIV treasury buy/sell middle.
 
-function matchDivMiddleToMarketInMidZoneV2() {
-  const floor = divFloorMiddleV2();
-  const top = divTopPointV2();
-  if (s.divPrice > floor && s.divPrice < top) {
-    setMiddlePreserveSpread("div", s.divPrice);
-  }
+    Correct model:
+    - DIV buy point is set by treasury.
+    - DIV sell point is set by treasury.
+    - DIV middle is only the average of those treasury-set points.
+    - DIV market price moves separately.
+    - Only the DIV Top-Point Rule responds to market price.
+  */
 }
 
 function coinKeys(coin) {
@@ -444,7 +444,7 @@ function activeTreasuryPoints(coin) {
   return {
     buy: useFloor ? divFloorBuyV2() : getPoint("div", "buy"),
     sell: useFloor ? divFloorSellV2() : getPoint("div", "sell"),
-    label: useFloor ? "floor" : "mid-zone"
+    label: useFloor ? "floor" : "treasury point"
   };
 }
 
@@ -610,7 +610,7 @@ function processDivTreasuryDesk(hours) {
       s.treasuryUsd += usd;
       s.divPrice *= Math.max(0.90, 1 - Math.min(0.08, excess * 0.18));
       journalTrade({ source: "treasury", coin: "div", action: "sold", amount: sold, usd, price: sell });
-      if (sold > 1000) addLog(`Treasury sold ${fmtNum(sold)} DIV at ${useFloor ? "floor" : "mid-zone"} selling point $${sell.toFixed(4)}.`, "good");
+      if (sold > 1000) addLog(`Treasury sold ${fmtNum(sold)} DIV at ${useFloor ? "floor" : "treasury"} selling point $${sell.toFixed(4)}.`, "good");
     }
   }
 
@@ -629,7 +629,7 @@ function processDivTreasuryDesk(hours) {
       s.treasuryUsd -= usd;
       s.divPrice *= 1 + Math.min(0.08, weakness * 0.25);
       journalTrade({ source: "treasury", coin: "div", action: "bought", amount: bought, usd, price: buy });
-      if (bought > 1000) addLog(`Treasury bought back ${fmtNum(bought)} DIV at ${useFloor ? "floor" : "mid-zone"} buying point $${buy.toFixed(4)}.`, "warn");
+      if (bought > 1000) addLog(`Treasury bought back ${fmtNum(bought)} DIV at ${useFloor ? "floor" : "treasury"} buying point $${buy.toFixed(4)}.`, "warn");
     }
   }
 }
